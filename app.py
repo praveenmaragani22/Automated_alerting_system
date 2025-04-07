@@ -1,5 +1,4 @@
 import os
-import urllib.parse
 from flask import Flask, render_template, request, redirect, flash, session, url_for, jsonify
 from flask_pymongo import PyMongo
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -10,31 +9,28 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import smtplib
 from email.message import EmailMessage
 
-# Load environment variables from .env file
+# Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "default_secret_key")
 
-# Encode MongoDB credentials
-username = urllib.parse.quote_plus("root")
-password = urllib.parse.quote_plus("Praveen@2004")
-
-# MongoDB Atlas URI with encoded credentials
-mongo_uri = f"mongodb+srv://{username}:{password}@cluster0.yzhs3nf.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
-app.config["MONGO_URI"] = mongo_uri
-
+# MongoDB config
+app.config["MONGO_URI"] = os.getenv("MONGO_URI")
 mongo = PyMongo(app)
 
-# Email Configuration
-EMAIL_ADDRESS = os.getenv("EMAIL_USER", "your_email@gmail.com")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASS", "your_email_password")
+if mongo.db is None:
+    raise Exception("MongoDB connection failed. Check your MONGO_URI and network access.")
 
-# Background Scheduler
+# Email Config
+EMAIL_ADDRESS = os.getenv("EMAIL_USER")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASS")
+
+# Scheduler
 scheduler = BackgroundScheduler()
 scheduler.start()
 
-# Ensure indexes
+# Create indexes
 mongo.db.users.create_index("email", unique=True)
 mongo.db.users.create_index("phone", unique=True)
 mongo.db.tasks.create_index("task_name")
@@ -51,31 +47,24 @@ def send_email(to, subject, content):
             smtp.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
             smtp.send_message(msg)
     except Exception as e:
-        print(f"Error sending email: {e}")
+        print(f"Email sending error: {e}")
 
 def schedule_task_emails(task):
     try:
-        task_datetime_str = f"{task['task_date']} {task['task_time']}"
-        task_datetime = datetime.strptime(task_datetime_str, "%Y-%m-%d %H:%M")
-
-        email = task['email']
-        name = task['name']
-        task_name = task['task_name']
+        task_datetime = datetime.strptime(f"{task['task_date']} {task['task_time']}", "%Y-%m-%d %H:%M")
+        email, name, task_name = task['email'], task['name'], task['task_name']
 
         scheduler.add_job(send_email, 'date', run_date=task_datetime - timedelta(hours=1),
-                          args=[email, "1 Hour Left",
-                                f"Hey {name}, you have 1 hour left to complete the task: {task_name}"])
+                          args=[email, "1 Hour Left", f"Hey {name}, 1 hour left for task: {task_name}"])
 
         scheduler.add_job(send_email, 'date', run_date=task_datetime,
-                          args=[email, "Time to Work",
-                                f"Hey {name}, it's time to do your task: {task_name}"])
+                          args=[email, "Time to Work", f"Hey {name}, it's time to do your task: {task_name}"])
 
         scheduler.add_job(send_email, 'date', run_date=task_datetime + timedelta(hours=1),
-                          args=[email, "Follow Up",
-                                f"Hey {name}, did you complete your task: {task_name}? 1 hour has passed."])
+                          args=[email, "Follow Up", f"Hey {name}, did you finish: {task_name}? 1 hour passed."])
 
     except Exception as e:
-        print(f"Failed to schedule task emails: {e}")
+        print(f"Scheduling error: {e}")
 
 @app.route('/')
 def home():
@@ -87,15 +76,11 @@ def register():
         return render_template("register.html")
 
     data = request.get_json()
-    name = data.get('name')
-    email = data.get('email')
-    phone = data.get('phone')
-    password = data.get('password')
+    name, email, phone, password = data.get('name'), data.get('email'), data.get('phone'), data.get('password')
 
     try:
-        existing_user = mongo.db.users.find_one({"$or": [{"email": email}, {"phone": phone}]})
-        if existing_user:
-            return jsonify({"success": False, "message": "User already registered. Please log in."}), 400
+        if mongo.db.users.find_one({"$or": [{"email": email}, {"phone": phone}]}):
+            return jsonify({"success": False, "message": "User already registered."}), 400
 
         hashed_password = generate_password_hash(password)
         mongo.db.users.insert_one({
@@ -106,71 +91,68 @@ def register():
         })
 
         send_email(email, "Registration Successful",
-                   f"Hi {name}, you have successfully registered to the Automated Scheduling and Alerting System. Now you can login and add tasks. We'll remind you about them, so you never miss anything important. Thank you!")
+                   f"Hi {name}, you've registered successfully! Add your tasks and we'll remind you on time!")
 
-        return jsonify({"success": True, "message": "Registration successful! Now you can log in."})
+        return jsonify({"success": True, "message": "Registration successful!"})
 
     except Exception as e:
-        return jsonify({"success": False, "message": f"An error occurred: {str(e)}"}), 500
+        return jsonify({"success": False, "message": str(e)}), 500
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
         data = request.get_json()
-        identifier = data.get('identifier')
-        password = data.get('password')
+        identifier, password = data.get('identifier'), data.get('password')
 
         user = mongo.db.users.find_one({"$or": [{"email": identifier}, {"phone": identifier}]})
-
         if user and check_password_hash(user['password'], password):
             session['user_id'] = str(user['_id'])
             session['name'] = user['name']
             session['email'] = user['email']
-            return jsonify({"success": True, "message": "Login successful! Redirecting..."})
+            return jsonify({"success": True, "message": "Login successful!"})
         else:
-            return jsonify({"success": False, "message": "Invalid email/phone or password."}), 401
+            return jsonify({"success": False, "message": "Invalid credentials."}), 401
 
     return render_template("login.html")
 
 @app.route('/dashboard')
 def dashboard():
-    if 'user_id' in session:
-        user = mongo.db.users.find_one({"_id": ObjectId(session['user_id'])})
+    if 'user_id' not in session:
+        flash("Please log in.", "warning")
+        return redirect(url_for('login'))
 
-        today = datetime.today().strftime('%Y-%m-%d')
-        thirty_days_ago = (datetime.today() - timedelta(days=30)).strftime('%Y-%m-%d')
+    user = mongo.db.users.find_one({"_id": ObjectId(session['user_id'])})
+    today = datetime.today().strftime('%Y-%m-%d')
+    thirty_days_ago = (datetime.today() - timedelta(days=30)).strftime('%Y-%m-%d')
 
-        tasks = list(mongo.db.tasks.find({
-            "email": user["email"],
-            "task_date": {"$gte": thirty_days_ago},
-            "deleted": {"$ne": True}
-        }))
+    tasks = list(mongo.db.tasks.find({
+        "email": user["email"],
+        "task_date": {"$gte": thirty_days_ago},
+        "deleted": {"$ne": True}
+    }))
 
-        return render_template("dashboard.html", user=user, tasks=tasks)
-
-    flash("Please log in first.", "warning")
-    return redirect(url_for('login'))
+    return render_template("dashboard.html", user=user, tasks=tasks)
 
 @app.route('/previous_tasks')
 def previous_tasks():
-    if 'user_id' in session:
-        user = mongo.db.users.find_one({"_id": ObjectId(session['user_id'])})
-        thirty_days_ago = (datetime.today() - timedelta(days=30)).strftime('%Y-%m-%d')
+    if 'user_id' not in session:
+        flash("Please log in.", "warning")
+        return redirect(url_for('login'))
 
-        tasks = list(mongo.db.tasks.find({
-            "email": user["email"],
-            "$or": [{"task_date": {"$lt": thirty_days_ago}}, {"deleted": True}]
-        }))
+    user = mongo.db.users.find_one({"_id": ObjectId(session['user_id'])})
+    thirty_days_ago = (datetime.today() - timedelta(days=30)).strftime('%Y-%m-%d')
 
-        return render_template("previous_tasks.html", user=user, tasks=tasks)
+    tasks = list(mongo.db.tasks.find({
+        "email": user["email"],
+        "$or": [{"task_date": {"$lt": thirty_days_ago}}, {"deleted": True}]
+    }))
 
-    flash("Please log in first.", "warning")
-    return redirect(url_for('login'))
+    return render_template("previous_tasks.html", user=user, tasks=tasks)
 
 @app.route('/addtask', methods=['GET', 'POST'])
 def add_task():
     if 'user_id' not in session:
-        flash("Please log in first.", "warning")
+        flash("Please log in.", "warning")
         return redirect(url_for('login'))
 
     user = mongo.db.users.find_one({"_id": ObjectId(session['user_id'])})
@@ -196,9 +178,10 @@ def add_task():
             "task_date": task_date,
             "task_time": task_time
         })
+
         schedule_task_emails(task)
 
-        flash("Task added successfully and notifications scheduled!", "success")
+        flash("Task added and scheduled!", "success")
         return redirect(url_for('dashboard'))
 
     return render_template("addtask.html", user=user)
@@ -213,7 +196,7 @@ def complete_task(task_id):
         return jsonify({"success": False, "message": "Task not found"}), 404
 
     mongo.db.tasks.update_one({"_id": ObjectId(task_id)}, {"$set": {"status": "Completed"}})
-    return jsonify({"success": True, "message": "Task marked as complete"}), 200
+    return jsonify({"success": True, "message": "Task marked complete"}), 200
 
 @app.route('/delete_task/<task_id>', methods=['POST'])
 def delete_task(task_id):
@@ -225,7 +208,7 @@ def delete_task(task_id):
         return jsonify({"success": False, "message": "Task not found"}), 404
 
     mongo.db.tasks.update_one({"_id": ObjectId(task_id)}, {"$set": {"deleted": True}})
-    return jsonify({"success": True, "message": "Task removed from dashboard and stored in previous tasks"}), 200
+    return jsonify({"success": True, "message": "Task marked as deleted"}), 200
 
 @app.route('/logout')
 def logout():
