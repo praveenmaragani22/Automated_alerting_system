@@ -9,14 +9,14 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import smtplib
 from email.message import EmailMessage
 
-# Load environment variables
+# Load environment variables from .env file
 load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "04e41340029c3ea064efbf45a775f4548c8910637b638f232d9dafd25a43125f")
 
-# MongoDB Configuration
-app.config["MONGO_URI"] = os.getenv("MONGO_URI", "mongodb://localhost:27017/alerting_system")
+# MongoDB Atlas Configuration (fallback to localhost if not set)
+app.config["MONGO_URI"] = os.getenv("MONGO_URI", "mongodb+srv://<username>:<password>@<cluster>.mongodb.net/aaa?retryWrites=true&w=majority")
 mongo = PyMongo(app)
 
 # Email Configuration
@@ -185,7 +185,6 @@ def add_task():
             "delete_after": (datetime.today() + timedelta(days=30)).strftime('%Y-%m-%d')
         })
 
-        # Fetch inserted task and schedule emails
         task = mongo.db.tasks.find_one({
             "email": user["email"],
             "task_name": task_name,
