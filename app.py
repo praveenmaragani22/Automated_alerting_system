@@ -33,15 +33,22 @@ EMAIL_PASSWORD = os.getenv("EMAIL_PASS")
 scheduler = BackgroundScheduler()
 scheduler.start()
 
-# Ensure indexes only if db is initialized
-@app.before_first_request
+# Flag to track if indexes have been created
+_indexes_created = False
+
+# Modified setup_indexes to work with current Flask versions
+@app.before_request
 def setup_indexes():
-    try:
-        mongo.db.users.create_index("email", unique=True)
-        mongo.db.users.create_index("phone", unique=True)
-        mongo.db.tasks.create_index("task_name")
-    except Exception as e:
-        print(f"Index setup failed: {e}")
+    global _indexes_created
+    if not _indexes_created and not request.path.startswith('/static'):
+        try:
+            mongo.db.users.create_index("email", unique=True)
+            mongo.db.users.create_index("phone", unique=True)
+            mongo.db.tasks.create_index("task_name")
+            _indexes_created = True
+            print("Database indexes created successfully")
+        except Exception as e:
+            print(f"Index setup failed: {e}")
 
 def send_email(to, subject, content):
     msg = EmailMessage()
