@@ -1,4 +1,5 @@
 import os
+import urllib.parse
 from flask import Flask, render_template, request, redirect, flash, session, url_for, jsonify
 from flask_pymongo import PyMongo
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -13,21 +14,27 @@ from email.message import EmailMessage
 load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY", "04e41340029c3ea064efbf45a775f4548c8910637b638f232d9dafd25a43125f")
+app.secret_key = os.getenv("SECRET_KEY", "default_secret_key")
 
-# MongoDB Atlas Configuration (fallback to localhost if not set)
-app.config["MONGO_URI"] = os.getenv("MONGO_URI", "mongodb+srv://root:Praveen%402004@cluster0.yzhs3nf.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
+# Encode MongoDB credentials
+username = urllib.parse.quote_plus("root")
+password = urllib.parse.quote_plus("Praveen@2004")
+
+# MongoDB Atlas URI with encoded credentials
+mongo_uri = f"mongodb+srv://{username}:{password}@cluster0.yzhs3nf.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+app.config["MONGO_URI"] = mongo_uri
+
 mongo = PyMongo(app)
 
 # Email Configuration
 EMAIL_ADDRESS = os.getenv("EMAIL_USER", "your_email@gmail.com")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASS", "your_app_password")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASS", "your_email_password")
 
 # Background Scheduler
 scheduler = BackgroundScheduler()
 scheduler.start()
 
-# Ensure indexes for faster lookups
+# Ensure indexes
 mongo.db.users.create_index("email", unique=True)
 mongo.db.users.create_index("phone", unique=True)
 mongo.db.tasks.create_index("task_name")
@@ -98,7 +105,9 @@ def register():
             "password": hashed_password
         })
 
-        send_email(email, "Registration Successful", f"Hi {name}, you have successfully registered to the Automated Scheduling And Alerting System now you can login And add tasks so,we can send a remainder to you about your task.So there is no anymore chance to Miss your Important Works Any issues feel free to contact us...Thank you..")
+        send_email(email, "Registration Successful",
+                   f"Hi {name}, you have successfully registered to the Automated Scheduling and Alerting System. Now you can login and add tasks. We'll remind you about them, so you never miss anything important. Thank you!")
+
         return jsonify({"success": True, "message": "Registration successful! Now you can log in."})
 
     except Exception as e:
@@ -119,7 +128,7 @@ def login():
             session['email'] = user['email']
             return jsonify({"success": True, "message": "Login successful! Redirecting..."})
         else:
-            return jsonify({"success": False, "message": "Invalid email/phone or password. Please try again."}), 401
+            return jsonify({"success": False, "message": "Invalid email/phone or password."}), 401
 
     return render_template("login.html")
 
@@ -127,7 +136,7 @@ def login():
 def dashboard():
     if 'user_id' in session:
         user = mongo.db.users.find_one({"_id": ObjectId(session['user_id'])})
-        
+
         today = datetime.today().strftime('%Y-%m-%d')
         thirty_days_ago = (datetime.today() - timedelta(days=30)).strftime('%Y-%m-%d')
 
@@ -146,15 +155,11 @@ def dashboard():
 def previous_tasks():
     if 'user_id' in session:
         user = mongo.db.users.find_one({"_id": ObjectId(session['user_id'])})
-
         thirty_days_ago = (datetime.today() - timedelta(days=30)).strftime('%Y-%m-%d')
 
         tasks = list(mongo.db.tasks.find({
             "email": user["email"],
-            "$or": [
-                {"task_date": {"$lt": thirty_days_ago}},  
-                {"deleted": True}
-            ]
+            "$or": [{"task_date": {"$lt": thirty_days_ago}}, {"deleted": True}]
         }))
 
         return render_template("previous_tasks.html", user=user, tasks=tasks)
