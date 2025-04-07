@@ -16,7 +16,7 @@ app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "04e41340029c3ea064efbf45a775f4548c8910637b638f232d9dafd25a43125f")
 
 # MongoDB Atlas Configuration (fallback to localhost if not set)
-app.config["MONGO_URI"] = os.getenv("MONGO_URI", "mongodb+srv://<username>:<password>@<cluster>.mongodb.net/aaa?retryWrites=true&w=majority")
+app.config["MONGO_URI"] = os.getenv("MONGO_URI","mongodb+srv://root:<Praveen@2004>@cluster0.yzhs3nf.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
 mongo = PyMongo(app)
 
 # Email Configuration
