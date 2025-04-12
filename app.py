@@ -251,10 +251,10 @@ def login():
     flash("Logged in successfully")
     return redirect(url_for('dashboard'))
 
-@app.route('/forgot-password', methods=['GET', 'POST'])
+@app.route('/forgotpassword', methods=['GET', 'POST'])
 def forgot_password():
     if request.method == 'GET':
-        return render_template("forgot_password.html")
+        return render_template("forgotpassword.html")
 
     data = request.get_json()
     email = data.get('email')
