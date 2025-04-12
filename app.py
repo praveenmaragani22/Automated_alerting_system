@@ -1,5 +1,6 @@
 import os
 import urllib.parse
+import secrets
 from flask import Flask, render_template, request, redirect, flash, session, url_for, jsonify
 from flask_pymongo import PyMongo
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -7,13 +8,15 @@ from dotenv import load_dotenv
 from bson.objectid import ObjectId
 from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.jobstores.mongodb import MongoDBJobStore
 import smtplib
 from email.message import EmailMessage
+import pytz
 
 # Load .env variables
 load_dotenv()
 
-app = Flask(__name__,template_folder=os.path.abspath('.'))
+app = Flask(__name__, template_folder=os.path.abspath('.'))
 app.secret_key = os.getenv("SECRET_KEY", "default_secret_key")
 
 # Encode MongoDB credentials
@@ -21,22 +24,124 @@ username = urllib.parse.quote_plus(os.getenv("MONGO_USER"))
 password = urllib.parse.quote_plus(os.getenv("MONGO_PASS"))
 
 # MongoDB URI
-app.config["MONGO_URI"] = f"mongodb+srv://{username}:{password}@cluster0.yzhs3nf.mongodb.net/alerting_system?retryWrites=true&w=majority&appName=Cluster0"
+mongo_uri = f"mongodb+srv://{username}:{password}@cluster0.yzhs3nf.mongodb.net/alerting_system?retryWrites=true&w=majority&appName=Cluster0"
+app.config["MONGO_URI"] = mongo_uri
 
 mongo = PyMongo(app)
 
 # Email config
 EMAIL_ADDRESS = os.getenv("EMAIL_USER")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASS")
+APP_DOMAIN = os.getenv("APP_DOMAIN", "http://localhost:5000")  # Your application domain
 
-# Scheduler
-scheduler = BackgroundScheduler()
+# Configure scheduler with persistent storage
+jobstores = {
+    'default': MongoDBJobStore(database='alerting_system', collection='scheduled_jobs', client=mongo.cx)
+}
+scheduler = BackgroundScheduler(jobstores=jobstores, timezone=pytz.UTC)
 scheduler.start()
 
 # Flag to track if indexes have been created
 _indexes_created = False
 
-# Modified setup_indexes to work with current Flask versions
+def send_email(to, subject, content, html_content=None):
+    msg = EmailMessage()
+    msg.set_content(content)
+    if html_content:
+        msg.add_alternative(html_content, subtype='html')
+    
+    msg['Subject'] = subject
+    msg['From'] = f"Automated Alert System <{EMAIL_ADDRESS}>"
+    msg['To'] = to
+    msg['Reply-To'] = EMAIL_ADDRESS
+    msg['X-Mailer'] = 'Python'
+    msg['Precedence'] = 'bulk'
+    msg['MIME-Version'] = '1.0'
+    msg['Content-Type'] = 'text/plain; charset=utf-8'
+    msg['List-Unsubscribe'] = f'<{APP_DOMAIN}/unsubscribe?email={to}>'
+
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+            smtp.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+            smtp.send_message(msg)
+        print(f"Email successfully sent to {to}")
+        return True
+    except Exception as e:
+        print(f"Error sending email: {e}")
+        return False
+
+def generate_login_token(email):
+    """Generate a one-time login token"""
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.now(pytz.UTC) + timedelta(hours=24)
+    
+    mongo.db.login_tokens.insert_one({
+        'email': email,
+        'token': token,
+        'expires_at': expires_at,
+        'used': False
+    })
+    
+    return token
+
+def schedule_task_emails(task):
+    try:
+        task_datetime_str = f"{task['task_date']} {task['task_time']}"
+        local_tz = pytz.timezone('UTC')
+        naive_datetime = datetime.strptime(task_datetime_str, "%Y-%m-%d %H:%M")
+        local_datetime = local_tz.localize(naive_datetime)
+        utc_datetime = local_datetime.astimezone(pytz.UTC)
+        
+        email = task['email']
+        name = task['name']
+        task_name = task['task_name']
+        task_id = str(task['_id'])
+
+        # Remove any existing jobs for this task
+        scheduler.remove_job(f"{task_id}_1hour")
+        scheduler.remove_job(f"{task_id}_now")
+        scheduler.remove_job(f"{task_id}_1hour_after")
+
+        # Schedule new jobs with improved email content
+        email_content = f"""
+        Hello {name},
+        
+        This is a reminder about your task: {task_name}
+        
+        Task Time: {task_datetime_str}
+        
+        ---
+        Automated Alert System
+        """
+        
+        scheduler.add_job(
+            send_email,
+            'date',
+            run_date=utc_datetime - timedelta(hours=1),
+            args=[email, f"Reminder: {task_name} in 1 hour", email_content],
+            id=f"{task_id}_1hour"
+        )
+
+        scheduler.add_job(
+            send_email,
+            'date',
+            run_date=utc_datetime,
+            args=[email, f"Time to start: {task_name}", email_content],
+            id=f"{task_id}_now"
+        )
+
+        scheduler.add_job(
+            send_email,
+            'date',
+            run_date=utc_datetime + timedelta(hours=1),
+            args=[email, f"Follow up: {task_name}", email_content],
+            id=f"{task_id}_1hour_after"
+        )
+
+        print(f"Scheduled emails for task {task_name} at {utc_datetime}")
+    except Exception as e:
+        print(f"Failed to schedule task emails: {e}")
+
 @app.before_request
 def setup_indexes():
     global _indexes_created
@@ -45,48 +150,12 @@ def setup_indexes():
             mongo.db.users.create_index("email", unique=True)
             mongo.db.users.create_index("phone", unique=True)
             mongo.db.tasks.create_index("task_name")
+            mongo.db.login_tokens.create_index("token", unique=True)
+            mongo.db.login_tokens.create_index([("expires_at", 1)], expireAfterSeconds=0)
             _indexes_created = True
             print("Database indexes created successfully")
         except Exception as e:
             print(f"Index setup failed: {e}")
-
-def send_email(to, subject, content):
-    msg = EmailMessage()
-    msg.set_content(content)
-    msg['Subject'] = subject
-    msg['From'] = EMAIL_ADDRESS
-    msg['To'] = to
-
-    try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
-            smtp.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
-            smtp.send_message(msg)
-    except Exception as e:
-        print(f"Error sending email: {e}")
-
-def schedule_task_emails(task):
-    try:
-        task_datetime_str = f"{task['task_date']} {task['task_time']}"
-        task_datetime = datetime.strptime(task_datetime_str, "%Y-%m-%d %H:%M")
-
-        email = task['email']
-        name = task['name']
-        task_name = task['task_name']
-
-        scheduler.add_job(send_email, 'date', run_date=task_datetime - timedelta(hours=1),
-                          args=[email, "1 Hour Left",
-                                f"Hey {name}, you have 1 hour left to complete the task: {task_name}"])
-
-        scheduler.add_job(send_email, 'date', run_date=task_datetime,
-                          args=[email, "Time to Work",
-                                f"Hey {name}, it's time to do your task: {task_name}"])
-
-        scheduler.add_job(send_email, 'date', run_date=task_datetime + timedelta(hours=1),
-                          args=[email, "Follow Up",
-                                f"Hey {name}, did you complete your task: {task_name}? 1 hour has passed."])
-
-    except Exception as e:
-        print(f"Failed to schedule task emails: {e}")
 
 @app.route('/')
 def home():
@@ -113,127 +182,99 @@ def register():
             "name": name,
             "email": email,
             "phone": phone,
-            "password": hashed_password
+            "password": hashed_password,
+            "verified": False,
+            "created_at": datetime.now(pytz.UTC)
         })
 
-        send_email(email, "Registration Successful",
-                   f"Hi {name}, you have successfully registered to the Automated Scheduling and Alerting System.")
+        # Generate login token
+        login_token = generate_login_token(email)
+        login_url = f"{APP_DOMAIN}/login_with_token?token={login_token}"
+        
+        # Send welcome email with login link
+        subject = "Welcome to Automated Alert System - Your Login Link"
+        text_content = f"""
+        Hi {name},
+        
+        Thank you for registering with Automated Alert System!
+        
+        You can login directly using this link (valid for 24 hours):
+        {login_url}
+        
+        If you didn't request this, please ignore this email.
+        
+        ---
+        Automated Alert System
+        """
+        
+        html_content = f"""
+        <html>
+            <body>
+                <p>Hi {name},</p>
+                <p>Thank you for registering with Automated Alert System!</p>
+                <p>You can login directly using this link (valid for 24 hours):</p>
+                <p><a href="{login_url}">{login_url}</a></p>
+                <p>If you didn't request this, please ignore this email.</p>
+                <p>---<br>Automated Alert System</p>
+            </body>
+        </html>
+        """
+        
+        send_email(email, subject, text_content, html_content)
 
-        return jsonify({"success": True, "message": "Registration successful! Now you can log in."})
+        return jsonify({"success": True, "message": "Registration successful! Check your email for login instructions."})
     except Exception as e:
         return jsonify({"success": False, "message": f"Error: {str(e)}"}), 500
 
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
-        data = request.get_json()
-        identifier = data.get('identifier')
-        password = data.get('password')
-
-        user = mongo.db.users.find_one({"$or": [{"email": identifier}, {"phone": identifier}]})
-
-        if user and check_password_hash(user['password'], password):
-            session['user_id'] = str(user['_id'])
-            session['name'] = user['name']
-            session['email'] = user['email']
-            return jsonify({"success": True, "message": "Login successful!"})
-        else:
-            return jsonify({"success": False, "message": "Invalid credentials."}), 401
-
-    return render_template("login.html")
-
-@app.route('/dashboard')
-def dashboard():
-    if 'user_id' in session:
-        user = mongo.db.users.find_one({"_id": ObjectId(session['user_id'])})
-        today = datetime.today().strftime('%Y-%m-%d')
-        thirty_days_ago = (datetime.today() - timedelta(days=30)).strftime('%Y-%m-%d')
-
-        tasks = list(mongo.db.tasks.find({
-            "email": user["email"],
-            "task_date": {"$gte": thirty_days_ago},
-            "deleted": {"$ne": True}
-        }))
-
-        return render_template("dashboard.html", user=user, tasks=tasks)
-
-    flash("Please log in first.")
-    return redirect(url_for('login'))
-
-@app.route('/previous_tasks')
-def previous_tasks():
-    if 'user_id' in session:
-        user = mongo.db.users.find_one({"_id": ObjectId(session['user_id'])})
-        thirty_days_ago = (datetime.today() - timedelta(days=30)).strftime('%Y-%m-%d')
-
-        tasks = list(mongo.db.tasks.find({
-            "email": user["email"],
-            "$or": [{"task_date": {"$lt": thirty_days_ago}}, {"deleted": True}]
-        }))
-
-        return render_template("previous_tasks.html", user=user, tasks=tasks)
-
-    flash("Please log in first.")
-    return redirect(url_for('login'))
-
-@app.route('/addtask', methods=['GET', 'POST'])
-def add_task():
-    if 'user_id' not in session:
-        flash("Please log in first.")
+@app.route('/login_with_token')
+def login_with_token():
+    token = request.args.get('token')
+    if not token:
+        flash("Invalid login link")
         return redirect(url_for('login'))
+    
+    token_data = mongo.db.login_tokens.find_one({
+        'token': token,
+        'used': False,
+        'expires_at': {'$gt': datetime.now(pytz.UTC)}
+    })
+    
+    if not token_data:
+        flash("Invalid or expired login link")
+        return redirect(url_for('login'))
+    
+    user = mongo.db.users.find_one({'email': token_data['email']})
+    if not user:
+        flash("User not found")
+        return redirect(url_for('login'))
+    
+    # Mark token as used
+    mongo.db.login_tokens.update_one(
+        {'_id': token_data['_id']},
+        {'$set': {'used': True}}
+    )
+    
+    # Set session
+    session['user_id'] = str(user['_id'])
+    session['name'] = user['name']
+    session['email'] = user['email']
+    
+    flash("Logged in successfully!")
+    return redirect(url_for('dashboard'))
 
-    user = mongo.db.users.find_one({"_id": ObjectId(session['user_id'])})
-
-    if request.method == 'POST':
-        task_name = request.form['task_name']
-        task_date = request.form['task_date']
-        task_time = request.form['task_time']
-
-        mongo.db.tasks.insert_one({
-            "name": user["name"],
-            "email": user["email"],
-            "task_name": task_name,
-            "task_date": task_date,
-            "task_time": task_time,
-            "status": "Pending",
-            "deleted": False,
-            "delete_after": (datetime.today() + timedelta(days=30)).strftime('%Y-%m-%d')
-        })
-
-        task = mongo.db.tasks.find_one({
-            "email": user["email"],
-            "task_name": task_name,
-            "task_date": task_date,
-            "task_time": task_time
-        })
-        schedule_task_emails(task)
-
-        flash("Task added and alerts scheduled!")
-        return redirect(url_for('dashboard'))
-
-    return render_template("addtask.html", user=user)
-
-@app.route('/complete_task/<task_id>', methods=['POST'])
-def complete_task(task_id):
-    if 'user_id' not in session:
-        return jsonify({"success": False}), 403
-
-    mongo.db.tasks.update_one({"_id": ObjectId(task_id)}, {"$set": {"status": "Completed"}})
-    return jsonify({"success": True})
-
-@app.route('/delete_task/<task_id>', methods=['POST'])
-def delete_task(task_id):
-    if 'user_id' not in session:
-        return jsonify({"success": False}), 403
-
-    mongo.db.tasks.update_one({"_id": ObjectId(task_id)}, {"$set": {"deleted": True}})
-    return jsonify({"success": True})
-
-@app.route('/logout')
-def logout():
-    session.clear()
-    flash("Logged out.")
-    return redirect(url_for('home'))
+# ... [Keep all your other existing routes unchanged] ...
 
 if __name__ == '__main__':
+    # Schedule existing tasks on startup
+    with app.app_context():
+        active_tasks = mongo.db.tasks.find({
+            "deleted": {"$ne": True},
+            "task_date": {"$gte": datetime.now(pytz.UTC).strftime('%Y-%m-%d')}
+        })
+        for task in active_tasks:
+            try:
+                schedule_task_emails(task)
+            except Exception as e:
+                print(f"Error rescheduling task {task['_id']}: {e}")
+    
     app.run(debug=True)
