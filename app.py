@@ -227,8 +227,8 @@ def register():
     except Exception as e:
         return jsonify({"success": False, "message": f"Error: {str(e)}"}), 500
 
-@app.route('/login_with_token')
-def login_with_token():
+@app.route('/login')
+def login():
     token = request.args.get('token')
     if not token:
         flash("Invalid login link")
