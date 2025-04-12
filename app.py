@@ -232,36 +232,31 @@ def login():
     token = request.args.get('token')
     if not token:
         flash("Invalid login link")
-        return redirect(url_for('login'))
-    
+        return render_template("login.html")  # ✅ Show the login form or error message
+
     token_data = mongo.db.login_tokens.find_one({
         'token': token,
         'used': False,
         'expires_at': {'$gt': datetime.now(pytz.UTC)}
     })
-    
+
     if not token_data:
         flash("Invalid or expired login link")
-        return redirect(url_for('login'))
-    
+        return render_template("login.html")  # ✅ Instead of redirect
+
     user = mongo.db.users.find_one({'email': token_data['email']})
     if not user:
         flash("User not found")
-        return redirect(url_for('login'))
-    
-    # Mark token as used
-    mongo.db.login_tokens.update_one(
-        {'_id': token_data['_id']},
-        {'$set': {'used': True}}
-    )
-    
-    # Set session
+        return render_template("login.html")  # ✅ Instead of redirect
+
+    # Valid token: proceed to login
+    mongo.db.login_tokens.update_one({'_id': token_data['_id']}, {'$set': {'used': True}})
     session['user_id'] = str(user['_id'])
     session['name'] = user['name']
     session['email'] = user['email']
-    
     flash("Logged in successfully!")
     return redirect(url_for('dashboard'))
+
 
 @app.route('/forgot_password', methods=['GET', 'POST'])
 def forgot_password():
