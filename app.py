@@ -261,6 +261,81 @@ def login_with_token():
     
     flash("Logged in successfully!")
     return redirect(url_for('dashboard'))
+    @app.route('/forgot_password', methods=['GET', 'POST'])
+def forgot_password():
+    if request.method == 'GET':
+        return render_template("forgot_password.html")
+
+    data = request.get_json()
+    email = data.get('email')
+
+    user = mongo.db.users.find_one({'email': email})
+    if not user:
+        return jsonify({'success': False, 'message': 'Email not found'}), 404
+
+    otp = secrets.randbelow(1000000)
+    otp_str = f"{otp:06d}"
+    otp_expiry = datetime.now(pytz.UTC) + timedelta(minutes=10)
+
+    mongo.db.password_reset_otp.update_one(
+        {'email': email},
+        {'$set': {
+            'otp': otp_str,
+            'expires_at': otp_expiry,
+            'verified': False
+        }},
+        upsert=True
+    )
+
+    subject = "Your OTP for Password Reset"
+    text = f"Your OTP to reset your password is: {otp_str}. It will expire in 10 minutes."
+    html = f"""
+    <html>
+        <body>
+            <p>Your OTP to reset your password is:</p>
+            <h2>{otp_str}</h2>
+            <p>This OTP is valid for 10 minutes.</p>
+        </body>
+    </html>
+    """
+
+    if send_email(email, subject, text, html):
+        return jsonify({'success': True, 'message': 'OTP sent to your email.'})
+    else:
+        return jsonify({'success': False, 'message': 'Failed to send email.'}), 500
+
+
+@app.route('/verify_otp', methods=['POST'])
+def verify_otp():
+    data = request.get_json()
+    email = data.get('email')
+    otp = data.get('otp')
+
+    record = mongo.db.password_reset_otp.find_one({'email': email})
+    if not record or record['otp'] != otp or datetime.now(pytz.UTC) > record['expires_at']:
+        return jsonify({'success': False, 'message': 'Invalid or expired OTP'}), 400
+
+    mongo.db.password_reset_otp.update_one({'email': email}, {'$set': {'verified': True}})
+    return jsonify({'success': True, 'message': 'OTP verified successfully'})
+
+
+@app.route('/reset_password', methods=['POST'])
+def reset_password():
+    data = request.get_json()
+    email = data.get('email')
+    new_password = data.get('new_password')
+
+    record = mongo.db.password_reset_otp.find_one({'email': email})
+    if not record or not record.get('verified'):
+        return jsonify({'success': False, 'message': 'OTP not verified'}), 400
+
+    hashed_password = generate_password_hash(new_password)
+    mongo.db.users.update_one({'email': email}, {'$set': {'password': hashed_password}})
+
+    mongo.db.password_reset_otp.delete_one({'email': email})
+
+    return jsonify({'success': True, 'message': 'Password reset successfully'})
+
 
 # ... [Keep all your other existing routes unchanged] ...
 
