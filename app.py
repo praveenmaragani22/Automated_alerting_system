@@ -152,6 +152,7 @@ def setup_indexes():
             mongo.db.tasks.create_index("task_name")
             mongo.db.login_tokens.create_index("token", unique=True)
             mongo.db.login_tokens.create_index([("expires_at", 1)], expireAfterSeconds=0)
+            mongo.db.password_reset_otp.create_index([("expires_at", 1)], expireAfterSeconds=0)
             _indexes_created = True
             print("Database indexes created successfully")
         except Exception as e:
@@ -261,7 +262,8 @@ def login_with_token():
     
     flash("Logged in successfully!")
     return redirect(url_for('dashboard'))
-    @app.route('/forgot_password', methods=['GET', 'POST'])
+
+@app.route('/forgot_password', methods=['GET', 'POST'])
 def forgot_password():
     if request.method == 'GET':
         return render_template("forgot_password.html")
@@ -304,7 +306,6 @@ def forgot_password():
     else:
         return jsonify({'success': False, 'message': 'Failed to send email.'}), 500
 
-
 @app.route('/verify_otp', methods=['POST'])
 def verify_otp():
     data = request.get_json()
@@ -317,7 +318,6 @@ def verify_otp():
 
     mongo.db.password_reset_otp.update_one({'email': email}, {'$set': {'verified': True}})
     return jsonify({'success': True, 'message': 'OTP verified successfully'})
-
 
 @app.route('/reset_password', methods=['POST'])
 def reset_password():
@@ -335,9 +335,6 @@ def reset_password():
     mongo.db.password_reset_otp.delete_one({'email': email})
 
     return jsonify({'success': True, 'message': 'Password reset successfully'})
-
-
-# ... [Keep all your other existing routes unchanged] ...
 
 if __name__ == '__main__':
     # Schedule existing tasks on startup
