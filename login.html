@@ -126,6 +126,19 @@
             margin-top: 10px;
             display: none;
         }
+
+        .forgot-link {
+            font-size: 14px;
+        }
+
+        .forgot-link a {
+            color: #FFD700;
+            text-decoration: none;
+        }
+
+        .forgot-link a:hover {
+            text-decoration: underline;
+        }
     </style>
 </head>
 <body>
@@ -142,6 +155,11 @@
             <div class="form-group">
                 <input type="password" id="password" name="password" class="form-control" required placeholder=" ">
                 <label class="floating-label" for="password">Password</label>
+            </div>
+
+            <!-- Forgot Password Link -->
+            <div class="text-end mb-3 forgot-link">
+                <a href="/forgot-password">Forgot Password?</a>
             </div>
 
             <p class="error-message">Invalid email or password. Please try again.</p>
