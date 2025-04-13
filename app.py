@@ -213,7 +213,7 @@ def dashboard():
     return f"Welcome {session['name']}! (Dashboard Coming Soon)"
 
 
-@app.route('/forgotpassword', methods=['GET', 'POST'])
+@app.route('/forgot-password', methods=['GET', 'POST'])
 def forgotpassword():
     if request.method == 'GET':
         return render_template("forgotpassword.html")
