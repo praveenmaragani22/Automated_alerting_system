@@ -164,8 +164,7 @@ def register():
             "email": email,
             "phone": phone,
             "password": hashed_password,
-            "verified": False,
-            "created_at": datetime.now(pytz.UTC)
+            
         })
 
         send_email(email, "Registration Successful",
