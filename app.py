@@ -147,33 +147,37 @@ def register():
     if request.method == 'GET':
         return render_template("register.html")
 
-    data = request.get_json()
-    name = data.get('name')
-    email = data.get('email')
-    phone = data.get('phone')
-    password = data.get('password')
+    # Handle JSON data
+    if not request.is_json:
+        return jsonify({"success": False, "message": "Request must be JSON"}), 400
 
     try:
+        data = request.get_json()
+        name = data.get('name')
+        email = data.get('email')
+        phone = data.get('phone')
+        password = data.get('password')
+
+        if not all([name, email, phone, password]):
+            return jsonify({"success": False, "message": "Missing fields"}), 400
+
+        # Rest of your existing logic...
         existing_user = mongo.db.users.find_one({"$or": [{"email": email}, {"phone": phone}]})
         if existing_user:
-            return jsonify({"success": False, "message": "User already registered. Please log in."}), 400
+            return jsonify({"success": False, "message": "User already exists"}), 400
 
         hashed_password = generate_password_hash(password)
         mongo.db.users.insert_one({
             "name": name,
             "email": email,
             "phone": phone,
-            "password": hashed_password,
-            
+            "password": hashed_password
         })
 
-        send_email(email, "Registration Successful",
-                   f"Hi {name}, you've successfully registered to the Automated Alerting System.")
-        return jsonify({"success": True, "message": "Registration successful. You may now log in."})
+        return jsonify({"success": True, "message": "Registration successful"})
 
     except Exception as e:
-        return jsonify({"success": False, "message": f"Error: {str(e)}"}), 500
-
+        return jsonify({"success": False, "message": str(e)}), 500
 
 @app.route('/login')
 def login():
