@@ -167,39 +167,172 @@
     </div>
 
     <script>
-        $(document).ready(function () {
-            $("#registerForm").on("submit", function (event) {
-                event.preventDefault();
-                $(".neon-btn").prop("disabled", true).text("Registering...");
+      $(document).ready(function () {
+    $("#registerForm").on("submit", function (event) {
+        event.preventDefault();
+        
+        // Disable button and show loading state
+        const $submitBtn = $(".neon-btn");
+        $submitBtn.prop("disabled", true).html(
+            '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Registering...'
+        );
 
-                var formData = {
-                    name: $("#name").val(),
-                    email: $("#email").val(),
-                    phone: $("#phone").val(),
-                    password: $("#password").val()
-                };
+        // Client-side validation
+        if (!validateForm()) {
+            $submitBtn.prop("disabled", false).text("Register");
+            return;
+        }
 
-                $.ajax({
-                    type: "POST",
-                    url: "/register",
-                    data: JSON.stringify(formData),
-                    contentType: "application/json",
-                    success: function (response) {
-                        if (response.success) {
-                            $("#registerForm").hide();
-                            $(".success-message").fadeIn();
-                        } else {
-                            $(".neon-btn").prop("disabled", false).text("Register");
-                            alert("Registration failed. Please try again.");
-                        }
-                    },
-                    error: function () {
-                        $(".neon-btn").prop("disabled", false).text("Register");
-                        alert("An error occurred. Please try again.");
-                    }
-                });
-            });
+        // Prepare data
+        const formData = {
+            name: $("#name").val().trim(),
+            email: $("#email").val().trim(),
+            phone: $("#phone").val().trim(),
+            password: $("#password").val()
+        };
+
+        // AJAX call
+        $.ajax({
+            type: "POST",
+            url: "/register",
+            data: JSON.stringify(formData),
+            contentType: "application/json",
+            dataType: "json",
+            beforeSend: function(xhr) {
+                // For CSRF protection (if using Flask-WTF)
+                xhr.setRequestHeader("X-Requested-With", "XMLHttpRequest");
+            },
+            success: function (response) {
+                if (response.success) {
+                    // Success UI update
+                    $("#registerForm").fadeOut(400, function() {
+                        $(".success-message").fadeIn();
+                    });
+                    
+                    // Optional: Redirect after delay
+                    setTimeout(() => {
+                        window.location.href = "/login";
+                    }, 3000);
+                } else {
+                    showError(response.message || "Registration failed");
+                    $submitBtn.prop("disabled", false).text("Register");
+                }
+            },
+            error: function (xhr) {
+                let errorMsg = "An error occurred";
+                
+                // Parse different error types
+                if (xhr.responseJSON && xhr.responseJSON.message) {
+                    errorMsg = xhr.responseJSON.message;
+                } else if (xhr.status === 0) {
+                    errorMsg = "Network error - please check your connection";
+                } else if (xhr.status === 400) {
+                    errorMsg = "Invalid data submitted";
+                } else if (xhr.status === 500) {
+                    errorMsg = "Server error - please try later";
+                }
+                
+                showError(errorMsg);
+                $submitBtn.prop("disabled", false).text("Register");
+            }
         });
+    });
+
+    // Real-time validation
+    $("#email, #phone, #password").on("input", function() {
+        validateField($(this));
+    });
+});
+
+// Client-side validation
+function validateForm() {
+    let isValid = true;
+    
+    // Check each field
+    isValid &= validateField($("#name"));
+    isValid &= validateField($("#email"));
+    isValid &= validateField($("#phone"));
+    isValid &= validateField($("#password"));
+    
+    return isValid;
+}
+
+function validateField($field) {
+    const value = $field.val().trim();
+    const fieldId = $field.attr("id");
+    let isValid = true;
+    let errorMsg = "";
+    
+    // Field-specific validation
+    switch(fieldId) {
+        case "name":
+            if (value.length < 2) {
+                errorMsg = "Name must be at least 2 characters";
+                isValid = false;
+            }
+            break;
+            
+        case "email":
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRegex.test(value)) {
+                errorMsg = "Invalid email format";
+                isValid = false;
+            }
+            break;
+            
+        case "phone":
+            const phoneRegex = /^[0-9]{10,15}$/;
+            if (!phoneRegex.test(value)) {
+                errorMsg = "Phone must be 10-15 digits";
+                isValid = false;
+            }
+            break;
+            
+        case "password":
+            if (value.length < 8) {
+                errorMsg = "Password must be 8+ characters";
+                isValid = false;
+            } else if (!/[A-Z]/.test(value)) {
+                errorMsg = "Password needs at least 1 uppercase letter";
+                isValid = false;
+            }
+            break;
+    }
+    
+    // Update UI
+    const $group = $field.closest(".form-group");
+    if (!isValid && value) {
+        $group.addClass("has-error");
+        $group.find(".help-block").remove();
+        $group.append(`<span class="help-block text-danger">${errorMsg}</span>`);
+    } else {
+        $group.removeClass("has-error");
+        $group.find(".help-block").remove();
+    }
+    
+    return isValid;
+}
+
+// Error display
+function showError(message) {
+    // Remove existing alerts
+    $(".alert").remove();
+    
+    // Create and show error alert
+    const alert = $(`
+        <div class="alert alert-danger alert-dismissible fade show" role="alert">
+            ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+    `);
+    
+    $(".register-card").prepend(alert);
+    
+    // Auto-dismiss after 5 seconds
+    setTimeout(() => {
+        alert.alert("close");
+    }, 5000);
+}
     </script>
 
 </body>
