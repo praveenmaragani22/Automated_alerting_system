@@ -270,7 +270,7 @@ def verify_otp():
         if not otp_record:
             return jsonify({"success": False, "message": "No OTP found for this email"}), 404
 
-        if datetime.now(pytz.UTC) > otp_record['expires_at']:
+        if datetime.now(timezone.utc) > otp_expiry:
             return jsonify({"success": False, "message": "OTP has expired"}), 401
 
         if user_otp != otp_record['otp']:
