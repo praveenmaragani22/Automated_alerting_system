@@ -292,7 +292,7 @@ def send_otp():
     return jsonify({"success": True, "message": "OTP sent to your email."})
 
 
-@app.route('/verify_otp', methods=['POST'])
+@app.route('/verify-otp', methods=['POST'])
 @limiter.limit("5 per minute")
 def verify_otp():
     data = request.get_json()
