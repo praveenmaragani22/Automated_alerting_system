@@ -12,13 +12,19 @@ from apscheduler.jobstores.mongodb import MongoDBJobStore
 import smtplib
 from email.message import EmailMessage
 import pytz
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 # Load environment variables
 load_dotenv()
 
 app = Flask(__name__, template_folder=os.path.abspath('.'))
 app.secret_key = os.getenv("SECRET_KEY", "default_secret_key")
-
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=["200 per day", "50 per hour"]
+)
 # Encode MongoDB credentials
 username = urllib.parse.quote_plus(os.getenv("MONGO_USER"))
 password = urllib.parse.quote_plus(os.getenv("MONGO_PASS"))
@@ -141,30 +147,23 @@ def home():
     return render_template("index.html")
 
 
-# ✅ Full working registration route
+#from flask import url_for  # Add this import
+
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if request.method == 'GET':
         return render_template("register.html")
 
-    # Handle JSON data
-    if not request.is_json:
-        return jsonify({"success": False, "message": "Request must be JSON"}), 400
+    data = request.get_json()
+    name = data.get('name')
+    email = data.get('email')
+    phone = data.get('phone')
+    password = data.get('password')
 
     try:
-        data = request.get_json()
-        name = data.get('name')
-        email = data.get('email')
-        phone = data.get('phone')
-        password = data.get('password')
-
-        if not all([name, email, phone, password]):
-            return jsonify({"success": False, "message": "Missing fields"}), 400
-
-        # Rest of your existing logic...
         existing_user = mongo.db.users.find_one({"$or": [{"email": email}, {"phone": phone}]})
         if existing_user:
-            return jsonify({"success": False, "message": "User already exists"}), 400
+            return jsonify({"success": False, "message": "User already registered. Please log in."}), 400
 
         hashed_password = generate_password_hash(password)
         mongo.db.users.insert_one({
@@ -174,10 +173,35 @@ def register():
             "password": hashed_password
         })
 
-        return jsonify({"success": True, "message": "Registration successful"})
+        # Generate login link (replace 'yourdomain.com' with your actual domain)
+        login_url = "https://automatedschedulingandalertingsystemguni.onrender.com/login"  # Static link
+        # OR dynamically generate (if your app has url_for support in emails):
+        # login_url = url_for('login', _external=True)  # Requires Flask's url_for
+
+        email_body = f"""
+        Hi {name},
+        
+        Thank you for registering to the Automated Scheduling and Alerting System!
+        
+        You can now log in here: {https://automatedschedulingandalertingsystemguni.onrender.com/login}
+        
+        Best regards,
+        Your Team
+        """
+        
+        send_email(
+            recipient=email,
+            subject="Registration Successful",
+            body=email_body
+        )
+        
+        return jsonify({
+            "success": True,
+            "message": "Registration successful! Check your email for the login link."
+        })
 
     except Exception as e:
-        return jsonify({"success": False, "message": str(e)}), 500
+        return jsonify({"success": False, "message": f"An error occurred: {str(e)}"}), 500
 
 @app.route('/login')
 def login():
@@ -251,9 +275,25 @@ def forgotpassword():
         return jsonify({'success': True, 'message': 'OTP sent to your email.'})
     else:
         return jsonify({'success': False, 'message': 'Failed to send OTP email.'}), 500
+    @app.route('/send-otp', methods=['POST'])
+@limiter.limit("3 per 5 minutes")
+def send_otp():
+    data = request.get_json()
+    email = data.get('email')
+
+    user = mongo.db.users.find_one({"email": email})
+    if not user:
+        return jsonify({"success": False, "message": "Email not registered."}), 404
+
+    otp = ''.join(random.choices(string.digits, k=6))
+    otp_storage[email] = {"otp": otp, "expires": datetime.utcnow() + timedelta(minutes=5)}
+
+    send_email(email, "Password Reset OTP", f"Hi {user['name']},\n\nYour OTP is: {otp}\n\nValid for 5 minutes.")
+    return jsonify({"success": True, "message": "OTP sent to your email."})
 
 
 @app.route('/verify_otp', methods=['POST'])
+@limiter.limit("5 per minute")
 def verify_otp():
     data = request.get_json()
     email = data.get('email')
