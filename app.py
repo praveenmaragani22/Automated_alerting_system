@@ -275,7 +275,7 @@ def forgotpassword():
         return jsonify({'success': True, 'message': 'OTP sent to your email.'})
     else:
         return jsonify({'success': False, 'message': 'Failed to send OTP email.'}), 500
-    @app.route('/send-otp', methods=['POST'])
+@app.route('/send-otp', methods=['POST'])
 @limiter.limit("3 per 5 minutes")
 def send_otp():
     data = request.get_json()
