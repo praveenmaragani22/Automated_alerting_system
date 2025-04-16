@@ -295,19 +295,25 @@ def send_otp():
 @app.route('/verify-otp', methods=['POST'])
 @limiter.limit("5 per minute")
 def verify_otp():
-    data = request.get_json()
-    email = data.get('email')
-    otp = data.get('otp')
+    try:
+        data = request.get_json()
+        user_otp = data.get('otp')
+        stored_otp = session.get('otp')  # Or fetch from DB
 
-    record = mongo.db.password_reset_otp.find_one({'email': email})
-    if not record or record['otp'] != otp or datetime.now(pytz.UTC) > record['expires_at']:
-        return jsonify({'success': False, 'message': 'Invalid or expired OTP'}), 400
+        if not user_otp:
+            return jsonify({"error": "OTP is required"}), 400
 
-    mongo.db.password_reset_otp.update_one({'email': email}, {'$set': {'verified': True}})
-    return jsonify({'success': True, 'message': 'OTP verified successfully'})
+        if user_otp != stored_otp:
+            return jsonify({"error": "Invalid OTP"}), 401
+
+        return jsonify({"success": True})
+    except Exception as e:
+        # Log the error for debugging
+        app.logger.error(f"OTP Verification Error: {str(e)}")
+        return jsonify({"error": "Server error"}), 500
 
 
-@app.route('/reset_password', methods=['POST'])
+@app.route('/reset-password', methods=['POST'])
 def reset_password():
     data = request.get_json()
     email = data.get('email')
