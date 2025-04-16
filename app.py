@@ -273,10 +273,25 @@ def send_otp():
     if not user:
         return jsonify({"success": False, "message": "Email not registered."}), 404
 
-    otp = ''.join(random.choices(string.digits, k=6))
-    otp_storage[email] = {"otp": otp, "expires": datetime.utcnow() + timedelta(minutes=5)}
+    otp = f"{random.randint(0, 999999):06d}"  # 6-digit OTP
+    otp_expiry = datetime.now(pytz.UTC) + timedelta(minutes=5)
 
-    send_email(email, "Password Reset OTP", f"Hi {user['name']},\n\nYour OTP is: {otp}\n\nValid for 5 minutes.")
+    # Store in MongoDB (consistent with /forgot-password)
+    mongo.db.password_reset_otp.update_one(
+        {'email': email},
+        {'$set': {
+            'otp': otp,
+            'expires_at': otp_expiry,
+            'verified': False
+        }},
+        upsert=True
+    )
+
+    send_email(
+        email, 
+        "Password Reset OTP", 
+        f"Hi {user.get('name', 'User')},\n\nYour OTP is: {otp}\n\nValid for 5 minutes."
+    )
     return jsonify({"success": True, "message": "OTP sent to your email."})
 
 @app.route('/verify-otp', methods=['POST'])
