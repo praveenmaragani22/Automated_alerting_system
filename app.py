@@ -242,39 +242,25 @@ def dashboard():
 
 
 @app.route('/forgot-password', methods=['GET', 'POST'])
-def forgotpassword():
+def forgot_password():
     if request.method == 'GET':
         return render_template("forgotpassword.html")
-
+    
+    # Handle POST request (form submission)
     data = request.get_json()
     email = data.get('email')
-
-    user = mongo.db.users.find_one({'email': email})
+    
+    # Your existing OTP sending logic here
+    user = mongo.db.users.find_one({"email": email})
     if not user:
-        return jsonify({'success': False, 'message': 'Email not found'}), 404
+        return jsonify({"success": False, "message": "Email not registered."}), 404
 
-    otp = secrets.randbelow(1000000)
-    otp_str = f"{otp:06d}"
-    otp_expiry = datetime.now(pytz.UTC) + timedelta(minutes=10)
+    otp = ''.join(random.choices(string.digits, k=6))
+    otp_storage[email] = {"otp": otp, "expires": datetime.utcnow() + timedelta(minutes=5)}
 
-    mongo.db.password_reset_otp.update_one(
-        {'email': email},
-        {'$set': {
-            'otp': otp_str,
-            'expires_at': otp_expiry,
-            'verified': False
-        }},
-        upsert=True
-    )
+    send_email(email, "Password Reset OTP", f"Hi {user['name']},\n\nYour OTP is: {otp}\n\nValid for 5 minutes.")
+    return jsonify({"success": True, "message": "OTP sent to your email."})
 
-    subject = "Your OTP for Password Reset"
-    text = f"Your OTP is: {otp_str}. It expires in 10 minutes."
-    html = f"<p>Your OTP: <b>{otp_str}</b><br>This OTP is valid for 10 minutes.</p>"
-
-    if send_email(email, subject, text, html):
-        return jsonify({'success': True, 'message': 'OTP sent to your email.'})
-    else:
-        return jsonify({'success': False, 'message': 'Failed to send OTP email.'}), 500
 @app.route('/send-otp', methods=['POST'])
 @limiter.limit("3 per 5 minutes")
 def send_otp():
@@ -291,55 +277,37 @@ def send_otp():
     send_email(email, "Password Reset OTP", f"Hi {user['name']},\n\nYour OTP is: {otp}\n\nValid for 5 minutes.")
     return jsonify({"success": True, "message": "OTP sent to your email."})
 
-
 @app.route('/verify-otp', methods=['POST'])
 @limiter.limit("5 per minute")
 def verify_otp():
-    try:
-        data = request.get_json()
-        user_otp = data.get('otp')
-        stored_otp = session.get('otp')  # Or fetch from DB
+    data = request.get_json()
+    email = data.get('email')
+    otp = data.get('otp')
 
-        if not user_otp:
-            return jsonify({"error": "OTP is required"}), 400
+    if email not in otp_storage or datetime.utcnow() > otp_storage[email]["expires"]:
+        otp_storage.pop(email, None)
+        return jsonify({"success": False, "message": "OTP expired or invalid."}), 400
 
-        if user_otp != stored_otp:
-            return jsonify({"error": "Invalid OTP"}), 401
+    if otp != otp_storage[email]["otp"]:
+        return jsonify({"success": False, "message": "Invalid OTP."}), 400
 
-        return jsonify({"success": True})
-    except Exception as e:
-        # Log the error for debugging
-        app.logger.error(f"OTP Verification Error: {str(e)}")
-        return jsonify({"error": "Server error"}), 500
+    return jsonify({"success": True, "message": "OTP verified."})
 
-
-@app.route('/reset-password', methods=['POST'])
+@app.route('/reset_password', methods=['POST'])
 def reset_password():
     data = request.get_json()
     email = data.get('email')
     new_password = data.get('new_password')
 
-    record = mongo.db.password_reset_otp.find_one({'email': email})
-    if not record or not record.get('verified'):
-        return jsonify({'success': False, 'message': 'OTP not verified'}), 400
+    user = mongo.db.users.find_one({"email": email})
+    if not user:
+        return jsonify({"success": False, "message": "User not found."}), 404
 
     hashed_password = generate_password_hash(new_password)
-    mongo.db.users.update_one({'email': email}, {'$set': {'password': hashed_password}})
-    mongo.db.password_reset_otp.delete_one({'email': email})
+    mongo.db.users.update_one({"email": email}, {"$set": {"password": hashed_password}})
+    otp_storage.pop(email, None)
 
-    return jsonify({'success': True, 'message': 'Password reset successfully'})
-
+    return jsonify({"success": True, "message": "Password reset successful."})
 
 if __name__ == '__main__':
-    with app.app_context():
-        active_tasks = mongo.db.tasks.find({
-            "deleted": {"$ne": True},
-            "task_date": {"$gte": datetime.now(pytz.UTC).strftime('%Y-%m-%d')}
-        })
-        for task in active_tasks:
-            try:
-                schedule_task_emails(task)
-            except Exception as e:
-                print(f"Task reschedule failed for {task.get('_id')}: {e}")
-
     app.run(debug=True)
