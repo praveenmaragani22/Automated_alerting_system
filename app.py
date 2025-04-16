@@ -1,6 +1,8 @@
 import os
 import urllib.parse
 import secrets
+import random
+import string
 from flask import Flask, render_template, request, redirect, flash, session, url_for, jsonify
 from flask_pymongo import PyMongo
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -11,8 +13,6 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.jobstores.mongodb import MongoDBJobStore
 import smtplib
 from email.message import EmailMessage
-import random
-import string
 import pytz
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -27,6 +27,7 @@ limiter = Limiter(
     key_func=get_remote_address,
     default_limits=["200 per day", "50 per hour"]
 )
+
 # Encode MongoDB credentials
 username = urllib.parse.quote_plus(os.getenv("MONGO_USER"))
 password = urllib.parse.quote_plus(os.getenv("MONGO_PASS"))
@@ -50,7 +51,6 @@ scheduler.start()
 
 _indexes_created = False  # index setup tracker
 
-
 # Send email function
 def send_email(to, subject, content, html_content=None):
     msg = EmailMessage()
@@ -72,7 +72,6 @@ def send_email(to, subject, content, html_content=None):
         print(f"Email send failed: {e}")
         return False
 
-
 # Generate one-time login token
 def generate_login_token(email):
     token = secrets.token_urlsafe(32)
@@ -86,7 +85,6 @@ def generate_login_token(email):
     })
 
     return token
-
 
 # Schedule task email reminders
 def schedule_task_emails(task):
@@ -126,7 +124,6 @@ def schedule_task_emails(task):
     except Exception as e:
         print(f"Task scheduling failed: {e}")
 
-
 @app.before_request
 def setup_indexes():
     global _indexes_created
@@ -137,19 +134,16 @@ def setup_indexes():
             mongo.db.tasks.create_index("task_name")
             mongo.db.login_tokens.create_index("token", unique=True)
             mongo.db.login_tokens.create_index([("expires_at", 1)], expireAfterSeconds=0)
+            mongo.db.password_reset_otp.create_index("email")
             mongo.db.password_reset_otp.create_index([("expires_at", 1)], expireAfterSeconds=0)
             _indexes_created = True
             print("Indexes created.")
         except Exception as e:
             print(f"Index creation failed: {e}")
 
-
 @app.route('/')
 def home():
     return render_template("index.html")
-
-
-#from flask import url_for  # Add this import
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
@@ -175,32 +169,20 @@ def register():
             "password": hashed_password
         })
 
-        # Generate login link (replace 'yourdomain.com' with your actual domain)
-        login_url = "https://automatedschedulingandalertingsystemguni.onrender.com/login"  # Static link
-        # OR dynamically generate (if your app has url_for support in emails):
-        # login_url = url_for('login', _external=True)  # Requires Flask's url_for
-
+        login_url = "https://automatedschedulingandalertingsystemguni.onrender.com/login"
         email_body = f"""
         Hi {name},
         
         Thank you for registering to the Automated Scheduling and Alerting System!
         
-        You can now log in here: {https://automatedschedulingandalertingsystemguni.onrender.com/login}
+        You can now log in here: {login_url}
         
         Best regards,
         Your Team
         """
         
-        send_email(
-            recipient=email,
-            subject="Registration Successful",
-            body=email_body
-        )
-        
-        return jsonify({
-            "success": True,
-            "message": "Registration successful! Check your email for the login link."
-        })
+        send_email(email, "Registration Successful", email_body)
+        return jsonify({"success": True, "message": "Registration successful! Check your email for the login link."})
 
     except Exception as e:
         return jsonify({"success": False, "message": f"An error occurred: {str(e)}"}), 500
@@ -234,7 +216,6 @@ def login():
     flash("Logged in successfully!")
     return redirect(url_for('dashboard'))
 
-
 @app.route('/dashboard')
 def dashboard():
     if 'user_id' not in session:
@@ -242,41 +223,21 @@ def dashboard():
         return redirect(url_for('home'))
     return f"Welcome {session['name']}! (Dashboard Coming Soon)"
 
-
 @app.route('/forgot-password', methods=['GET', 'POST'])
 def forgot_password():
     if request.method == 'GET':
         return render_template("forgotpassword.html")
     
-    # Handle POST request (form submission)
     data = request.get_json()
     email = data.get('email')
     
-    # Your existing OTP sending logic here
     user = mongo.db.users.find_one({"email": email})
     if not user:
         return jsonify({"success": False, "message": "Email not registered."}), 404
 
-    otp = ''.join(random.choices(string.digits, k=6))
-    otp_storage[email] = {"otp": otp, "expires": datetime.utcnow() + timedelta(minutes=5)}
-
-    send_email(email, "Password Reset OTP", f"Hi {user['name']},\n\nYour OTP is: {otp}\n\nValid for 5 minutes.")
-    return jsonify({"success": True, "message": "OTP sent to your email."})
-
-@app.route('/send-otp', methods=['POST'])
-@limiter.limit("3 per 5 minutes")
-def send_otp():
-    data = request.get_json()
-    email = data.get('email')
-
-    user = mongo.db.users.find_one({"email": email})
-    if not user:
-        return jsonify({"success": False, "message": "Email not registered."}), 404
-
-    otp = f"{random.randint(0, 999999):06d}"  # 6-digit OTP
+    otp = f"{random.randint(0, 999999):06d}"
     otp_expiry = datetime.now(pytz.UTC) + timedelta(minutes=5)
 
-    # Store in MongoDB (consistent with /forgot-password)
     mongo.db.password_reset_otp.update_one(
         {'email': email},
         {'$set': {
@@ -287,44 +248,87 @@ def send_otp():
         upsert=True
     )
 
-    send_email(
-        email, 
-        "Password Reset OTP", 
-        f"Hi {user.get('name', 'User')},\n\nYour OTP is: {otp}\n\nValid for 5 minutes."
-    )
+    send_email(email, "Password Reset OTP", f"Hi {user['name']},\n\nYour OTP is: {otp}\n\nValid for 5 minutes.")
     return jsonify({"success": True, "message": "OTP sent to your email."})
 
 @app.route('/verify-otp', methods=['POST'])
 @limiter.limit("5 per minute")
 def verify_otp():
-    data = request.get_json()
-    email = data.get('email')
-    otp = data.get('otp')
+    try:
+        data = request.get_json()
+        email = data.get('email')
+        user_otp = data.get('otp')
 
-    if email not in otp_storage or datetime.utcnow() > otp_storage[email]["expires"]:
-        otp_storage.pop(email, None)
-        return jsonify({"success": False, "message": "OTP expired or invalid."}), 400
+        if not all([email, user_otp]):
+            return jsonify({"success": False, "message": "Email and OTP are required"}), 400
 
-    if otp != otp_storage[email]["otp"]:
-        return jsonify({"success": False, "message": "Invalid OTP."}), 400
+        otp_record = mongo.db.password_reset_otp.find_one(
+            {"email": email},
+            sort=[("expires_at", -1)]
+        )
 
-    return jsonify({"success": True, "message": "OTP verified."})
+        if not otp_record:
+            return jsonify({"success": False, "message": "No OTP found for this email"}), 404
 
-@app.route('/reset_password', methods=['POST'])
+        if datetime.now(pytz.UTC) > otp_record['expires_at']:
+            return jsonify({"success": False, "message": "OTP has expired"}), 401
+
+        if user_otp != otp_record['otp']:
+            return jsonify({"success": False, "message": "Invalid OTP"}), 401
+
+        mongo.db.password_reset_otp.update_one(
+            {"_id": otp_record["_id"]},
+            {"$set": {"verified": True}}
+        )
+
+        return jsonify({"success": True, "message": "OTP verified successfully"})
+
+    except Exception as e:
+        app.logger.error(f"OTP Verification Error: {str(e)}")
+        return jsonify({"success": False, "message": "An error occurred during OTP verification"}), 500
+
+@app.route('/reset-password', methods=['POST'])
 def reset_password():
-    data = request.get_json()
-    email = data.get('email')
-    new_password = data.get('new_password')
+    try:
+        data = request.get_json()
+        email = data.get('email')
+        new_password = data.get('new_password')
 
-    user = mongo.db.users.find_one({"email": email})
-    if not user:
-        return jsonify({"success": False, "message": "User not found."}), 404
+        if not all([email, new_password]):
+            return jsonify({"success": False, "message": "Email and new password are required"}), 400
 
-    hashed_password = generate_password_hash(new_password)
-    mongo.db.users.update_one({"email": email}, {"$set": {"password": hashed_password}})
-    otp_storage.pop(email, None)
+        record = mongo.db.password_reset_otp.find_one({
+            'email': email,
+            'verified': True
+        })
+        
+        if not record:
+            return jsonify({'success': False, 'message': 'OTP not verified'}), 400
 
-    return jsonify({"success": True, "message": "Password reset successful."})
+        hashed_password = generate_password_hash(new_password)
+        mongo.db.users.update_one(
+            {'email': email},
+            {'$set': {'password': hashed_password}}
+        )
+        
+        mongo.db.password_reset_otp.delete_one({'email': email})
+
+        return jsonify({'success': True, 'message': 'Password reset successfully'})
+
+    except Exception as e:
+        app.logger.error(f"Password Reset Error: {str(e)}")
+        return jsonify({'success': False, 'message': 'An error occurred during password reset'}), 500
 
 if __name__ == '__main__':
+    with app.app_context():
+        active_tasks = mongo.db.tasks.find({
+            "deleted": {"$ne": True},
+            "task_date": {"$gte": datetime.now(pytz.UTC).strftime('%Y-%m-%d')}
+        })
+        for task in active_tasks:
+            try:
+                schedule_task_emails(task)
+            except Exception as e:
+                print(f"Task reschedule failed for {task.get('_id')}: {e}")
+
     app.run(debug=True)
